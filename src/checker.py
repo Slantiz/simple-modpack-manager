@@ -28,11 +28,17 @@ class VersionInfo:
     source: str = field(default="Modrinth")
 
 
+class CurseForgeError(Exception):
+    def __init__(self, message: str, response: requests.Response | None = None):
+        super().__init__(message)
+        self.cf_response = response
+
+
 # ── Verbose dump ──────────────────────────────────────────────────────────────
 
 
 def _verbose_dump(response: requests.Response) -> None:
-    print(colors.gray("    ┌─ Response dump ────────────────────────"))
+    print(colors.gray("\n    ┌─ Response dump ────────────────────────"))
     print(colors.gray(f"    │  URL     : {response.request.url}"))
     print(colors.gray(f"    │  Method  : {response.request.method}"))
     print(colors.gray(f"    │  Status  : {response.status_code} {response.reason}"))
@@ -115,7 +121,7 @@ def _cf_error_body(response) -> str:
         return f": {text[:200]}" if text else ""
 
 
-def _cf_mod_id(cf_slug: str, api_key: str) -> int | None:
+def _cf_mod_id(cf_slug: str, api_key: str) -> int:
     response = requests.get(
         f"{CF_BASE}/mods/search",
         params={"gameId": CF_GAME_ID, "slug": cf_slug},
@@ -127,19 +133,19 @@ def _cf_mod_id(cf_slug: str, api_key: str) -> int | None:
             response=response,
         )
     results = response.json().get("data", [])
-    return results[0]["id"] if results else None
+    if not results:
+        raise CurseForgeError(f"slug '{cf_slug}' not found in search API", response)
+    return results[0]["id"]
 
 
 def _curseforge_latest(
-    cf_slug: str, game_version: str, loader: str, api_key: str
+    cf_slug: str, game_version: str, loader: str, api_key: str, verbose: bool = False
 ) -> VersionInfo | None:
     loader_type = CF_LOADER_TYPE.get(loader.lower())
     if loader_type is None:
         raise ValueError(f"Unknown loader '{loader}' for CurseForge")
 
     mod_id = _cf_mod_id(cf_slug, api_key)
-    if mod_id is None:
-        return None
 
     response = requests.get(
         f"{CF_BASE}/mods/{mod_id}/files",
@@ -148,6 +154,30 @@ def _curseforge_latest(
     )
     response.raise_for_status()
     files = response.json().get("data", [])
+    last_response = response
+
+    if not files:
+        # Retry without loader filter — some mods are mislabelled in the CurseForge API
+        print(
+            colors.yellow(
+                f"\n      [!] No files for '{loader}' loader — retrying without loader filter ..."
+            ),
+            end=" ",
+            flush=True,
+        )
+        if verbose:
+            _verbose_dump(response)
+        fallback_response = requests.get(
+            f"{CF_BASE}/mods/{mod_id}/files",
+            params={"gameVersion": game_version},
+            headers=_cf_headers(api_key),
+        )
+        fallback_response.raise_for_status()
+        if verbose:
+            _verbose_dump(fallback_response)
+        files = fallback_response.json().get("data", [])
+        last_response = fallback_response
+
     if not files:
         return None
 
@@ -155,7 +185,10 @@ def _curseforge_latest(
     latest = files[0]
     download_url = latest.get("downloadUrl")
     if not download_url:
-        return None  # author-restricted download
+        raise CurseForgeError(
+            "author has disabled third-party API downloads (downloadUrl is null)",
+            last_response,
+        )
 
     return VersionInfo(
         version_id=str(latest["id"]),
@@ -216,8 +249,19 @@ def check_all(
                 )
                 try:
                     latest = _curseforge_latest(
-                        mod.curseforge_slug, game_version, loader, curseforge_api_key
+                        mod.curseforge_slug,
+                        game_version,
+                        loader,
+                        curseforge_api_key,
+                        verbose,
                     )
+                except CurseForgeError as e:
+                    reason = f"CurseForge: {e}"
+                    print(colors.red(f"[!] {reason}"))
+                    if verbose and e.cf_response:
+                        _verbose_dump(e.cf_response)
+                    not_found.append({"mod": mod, "reason": reason})
+                    continue
                 except requests.HTTPError as e:
                     if e.response.status_code == 403:
                         reason = f"CurseForge: mod has restricted API access (author disabled third-party downloads){_cf_error_body(e.response)}"
@@ -250,7 +294,8 @@ def check_all(
             not_found.append({"mod": mod, "reason": reason})
             continue
 
-        cached_version_id = cache.get(mod.slug, {}).get("version_id")
+        cache_key = mod.slug or mod.curseforge_slug
+        cached_version_id = cache.get(cache_key, {}).get("version_id")
         if cached_version_id is None:
             print(colors.green(f"[+] new ({latest.version_number}) [{latest.source}]"))
             to_download.append({"mod": mod, "version": latest, "is_new": True})

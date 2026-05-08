@@ -9,7 +9,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 
 def find_removed(mods: list, mod_cache: dict) -> dict:
-    active_slugs = {m.slug for m in mods}
+    active_slugs = {m.slug or m.curseforge_slug for m in mods}
     return {
         slug: entry for slug, entry in mod_cache.items() if slug not in active_slugs
     }
@@ -114,7 +114,8 @@ def run(profile: str, verbose: bool = False, force: bool = False) -> None:
         label = "[+]" if is_new else "[↑]"
         print(f"  {label} {mod.name} ({version.filename})...", end=" ", flush=True)
 
-        old_filename = mod_cache.get(mod.slug, {}).get("filename")
+        cache_key = mod.slug or mod.curseforge_slug
+        old_filename = mod_cache.get(cache_key, {}).get("filename")
 
         try:
             downloader.download(version.download_url, mods_dir, version.filename)
@@ -123,7 +124,7 @@ def run(profile: str, verbose: bool = False, force: bool = False) -> None:
                 downloader.remove_old(mods_dir, old_filename)
 
             cache.update_entry(
-                mod_cache, mod.slug, version.version_id, version.filename
+                mod_cache, cache_key, version.version_id, version.filename
             )
             cache.save(mod_cache, profile)
             print(colors.green("done"))
