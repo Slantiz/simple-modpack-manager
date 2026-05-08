@@ -176,6 +176,7 @@ def check_all(
     cache: dict,
     curseforge_api_key: str | None = None,
     verbose: bool = False,
+    force: bool = False,
 ) -> tuple[list, list, list]:
     to_download = []
     up_to_date = []
@@ -250,22 +251,23 @@ def check_all(
             continue
 
         cached_version_id = cache.get(mod.slug, {}).get("version_id")
-        if cached_version_id == latest.version_id:
+        if cached_version_id is None:
+            print(colors.green(f"[+] new ({latest.version_number}) [{latest.source}]"))
+            to_download.append({"mod": mod, "version": latest, "is_new": True})
+        elif cached_version_id == latest.version_id and not force:
             print(
                 colors.gray(
                     f"[=] up to date ({latest.version_number}) [{latest.source}]"
                 )
             )
             up_to_date.append({"mod": mod, "version": latest})
-        elif cached_version_id is None:
-            print(colors.green(f"[+] new ({latest.version_number}) [{latest.source}]"))
-            to_download.append({"mod": mod, "version": latest, "is_new": True})
         else:
-            print(
-                colors.yellow(
-                    f"[↑] update available ({latest.version_number}) [{latest.source}]"
-                )
+            tag = (
+                "[↑] update available"
+                if cached_version_id != latest.version_id
+                else "[~] forced re-download"
             )
+            print(colors.yellow(f"{tag} ({latest.version_number}) [{latest.source}]"))
             to_download.append({"mod": mod, "version": latest, "is_new": False})
 
     return to_download, up_to_date, not_found

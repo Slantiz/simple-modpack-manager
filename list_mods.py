@@ -2,6 +2,8 @@ import sys
 
 from src import cache, colors, config
 
+sys.stdout.reconfigure(encoding="utf-8")
+
 
 def _lookup(mod, cache_data: dict) -> str:
     entry = cache_data.get(mod.slug) or cache_data.get(mod.curseforge_slug or "")

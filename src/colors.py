@@ -1,27 +1,27 @@
-class _C:
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    GRAY = "\033[90m"
-    BOLD = "\033[1m"
-    ENDC = "\033[0m"
+import sys
+
+
+def _c(code: str, s: str) -> str:
+    if not sys.stdout.isatty():
+        return s
+    return code + s + "\033[0m"
 
 
 def green(s: str) -> str:
-    return _C.GREEN + s + _C.ENDC
+    return _c("\033[92m", s)
 
 
 def yellow(s: str) -> str:
-    return _C.YELLOW + s + _C.ENDC
+    return _c("\033[93m", s)
 
 
 def red(s: str) -> str:
-    return _C.RED + s + _C.ENDC
+    return _c("\033[91m", s)
 
 
 def gray(s: str) -> str:
-    return _C.GRAY + s + _C.ENDC
+    return _c("\033[90m", s)
 
 
 def bold(s: str) -> str:
-    return _C.BOLD + s + _C.ENDC
+    return _c("\033[1m", s)

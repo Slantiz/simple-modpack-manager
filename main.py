@@ -5,6 +5,8 @@ from pathlib import Path
 
 from src import cache, checker, colors, config, downloader
 
+sys.stdout.reconfigure(encoding="utf-8")
+
 
 def find_removed(mods: list, mod_cache: dict) -> dict:
     active_slugs = {m.slug for m in mods}
@@ -19,7 +21,7 @@ def print_section(title: str) -> None:
     print(colors.bold(f"{'─' * 50}"))
 
 
-def run(profile: str, verbose: bool = False) -> None:
+def run(profile: str, verbose: bool = False, force: bool = False) -> None:
     cfg = config.load("mods.toml")
     mods = cfg.mods_for_profile(profile)
     mods_dir = cfg.mods_dir(profile)
@@ -46,7 +48,7 @@ def run(profile: str, verbose: bool = False) -> None:
 
     mod_cache = cache.load(profile)
     to_download, up_to_date, not_found = checker.check_all(
-        mods, cfg.game_version, cfg.loader, mod_cache, cf_key, verbose
+        mods, cfg.game_version, cfg.loader, mod_cache, cf_key, verbose, force
     )
 
     to_add = [e for e in to_download if e.get("is_new")]
@@ -205,10 +207,16 @@ if __name__ == "__main__":
         action="store_true",
         help="Print full HTTP response details on errors",
     )
+    parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="Re-download all mods regardless of cache",
+    )
     args = parser.parse_args()
 
     try:
-        run(args.profile, args.verbose)
+        run(args.profile, args.verbose, args.force)
     except KeyboardInterrupt:
         print("\nCancelled.")
         sys.exit(0)
