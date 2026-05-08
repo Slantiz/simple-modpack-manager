@@ -1,0 +1,46 @@
+[settings]
+game_version = "1.21.1"
+loader = "neoforge"
+client_mods_dir = "mods/client"
+server_mods_dir = "mods/server"
+
+# side = "client" | "server" | "both"
+
+# ── Both ──────────────────────────────────────────────────────────────────────
+
+[[mods]]
+name = "Create"
+slug = "create"       # Modrinth project slug
+side = "both"
+
+[[mods]]
+name = "Farmer's Delight"
+slug = "farmers-delight"
+side = "both"
+
+# ── Client-only ───────────────────────────────────────────────────────────────
+
+[[mods]]
+name = "Sodium"
+slug = "sodium"
+side = "client"
+
+[[mods]]
+name = "JEI"
+slug = "jei"
+side = "client"
+
+# ── Server-only ───────────────────────────────────────────────────────────────
+
+[[mods]]
+name = "Spark"
+slug = "spark"
+side = "server"
+
+# ── CurseForge fallback (leave slug empty to skip Modrinth) ───────────────────
+
+[[mods]]
+name = "Configured"
+slug = ""
+curseforge_slug = "configured"
+side = "client"

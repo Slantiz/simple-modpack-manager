@@ -1,0 +1,17 @@
+# User config — copy mods.example.toml → mods.toml and fill in your mods
+mods.toml
+
+# CurseForge API key — copy .env.example → .env and fill in your key
+.env
+
+# Downloaded mod files
+mods/
+
+# Cache and summaries (generated at runtime)
+mod_cache_*.json
+summaries/
+
+# Python
+__pycache__/
+*.py[cod]
+.ruff_cache
