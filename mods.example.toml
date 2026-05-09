@@ -44,3 +44,12 @@ name = "Configured"
 slug = ""
 curseforge_slug = "configured"
 side = "client"
+
+# ── Manual mods (author has disabled API downloads — must be placed in mods folder manually) ──
+
+[[mods]]
+name = "Some Manual Mod"
+slug = ""
+curseforge_slug = "some-manual-mod"
+side = "both"
+manual = true

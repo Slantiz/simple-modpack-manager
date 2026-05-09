@@ -1,6 +1,7 @@
 import json
 import requests
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from . import colors
 
@@ -24,7 +25,7 @@ class VersionInfo:
     version_id: str
     version_number: str
     filename: str
-    download_url: str
+    download_url: str | None
     source: str = field(default="Modrinth")
 
 
@@ -154,7 +155,6 @@ def _curseforge_latest(
     )
     response.raise_for_status()
     files = response.json().get("data", [])
-    last_response = response
 
     if not files:
         # Retry without loader filter — some mods are mislabelled in the CurseForge API
@@ -176,25 +176,17 @@ def _curseforge_latest(
         if verbose:
             _verbose_dump(fallback_response)
         files = fallback_response.json().get("data", [])
-        last_response = fallback_response
 
     if not files:
         return None
 
     files.sort(key=lambda f: f["fileDate"], reverse=True)
     latest = files[0]
-    download_url = latest.get("downloadUrl")
-    if not download_url:
-        raise CurseForgeError(
-            "author has disabled third-party API downloads (downloadUrl is null)",
-            last_response,
-        )
-
     return VersionInfo(
         version_id=str(latest["id"]),
         version_number=latest["displayName"],
         filename=latest["fileName"],
-        download_url=download_url,
+        download_url=latest.get("downloadUrl"),
         source="CurseForge",
     )
 
@@ -210,10 +202,12 @@ def check_all(
     curseforge_api_key: str | None = None,
     verbose: bool = False,
     force: bool = False,
-) -> tuple[list, list, list]:
+    mods_dir: Path | None = None,
+) -> tuple[list, list, list, list]:
     to_download = []
     up_to_date = []
     not_found = []
+    manual_needed = []
     pad = max(len(m.name) for m in mods)
 
     for mod in mods:
@@ -243,7 +237,7 @@ def check_all(
         if modrinth_miss:
             if mod.curseforge_slug and curseforge_api_key:
                 print(
-                    colors.yellow("not on Modrinth, trying CurseForge ..."),
+                    colors.yellow("trying CurseForge ..."),
                     end=" ",
                     flush=True,
                 )
@@ -296,15 +290,62 @@ def check_all(
 
         cache_key = mod.slug or mod.curseforge_slug
         cached_version_id = cache.get(cache_key, {}).get("version_id")
+
+        is_manual = mod.manual or not latest.download_url
+        if is_manual:
+            cf_url = (
+                f"https://www.curseforge.com/minecraft/mc-mods/{mod.curseforge_slug}"
+            )
+            auto_note = " — API downloads disabled by author" if not mod.manual else ""
+            cache_key = mod.slug or mod.curseforge_slug
+            file_present = (
+                mods_dir is not None and (mods_dir / latest.filename).exists()
+            )
+
+            if file_present:
+                if cached_version_id != latest.version_id:
+                    cache[cache_key] = {
+                        "version_id": latest.version_id,
+                        "filename": latest.filename,
+                    }
+                print(
+                    colors.gray(f"[=] up to date ({latest.filename}) [{latest.source}]")
+                )
+                up_to_date.append({"mod": mod, "version": latest, "is_manual": True})
+            elif cached_version_id is None:
+                print(
+                    colors.blue(
+                        f"[M] manual download needed ({latest.filename}) [{latest.source}]{auto_note}"
+                    )
+                )
+                manual_needed.append(
+                    {"mod": mod, "version": latest, "url": cf_url, "is_new": True}
+                )
+            elif cached_version_id != latest.version_id:
+                print(
+                    colors.blue(
+                        f"[M] update available — manual download needed ({latest.filename}) [{latest.source}]{auto_note}"
+                    )
+                )
+                manual_needed.append(
+                    {"mod": mod, "version": latest, "url": cf_url, "is_new": False}
+                )
+            else:
+                print(
+                    colors.blue(
+                        f"[M] file missing — manual download needed ({latest.filename}) [{latest.source}]{auto_note}"
+                    )
+                )
+                manual_needed.append(
+                    {"mod": mod, "version": latest, "url": cf_url, "is_new": False}
+                )
+            continue
+
         if cached_version_id is None:
-            print(colors.green(f"[+] new ({latest.version_number}) [{latest.source}]"))
+            print(colors.green(f"[+] new ({latest.filename}) [{latest.source}]"))
             to_download.append({"mod": mod, "version": latest, "is_new": True})
         elif cached_version_id == latest.version_id and not force:
-            print(
-                colors.gray(
-                    f"[=] up to date ({latest.version_number}) [{latest.source}]"
-                )
-            )
+            print(colors.gray(f"[=] up to date ({latest.filename}) [{latest.source}]"))
             up_to_date.append({"mod": mod, "version": latest})
         else:
             tag = (
@@ -312,7 +353,7 @@ def check_all(
                 if cached_version_id != latest.version_id
                 else "[~] forced re-download"
             )
-            print(colors.yellow(f"{tag} ({latest.version_number}) [{latest.source}]"))
+            print(colors.yellow(f"{tag} ({latest.filename}) [{latest.source}]"))
             to_download.append({"mod": mod, "version": latest, "is_new": False})
 
-    return to_download, up_to_date, not_found
+    return to_download, up_to_date, not_found, manual_needed

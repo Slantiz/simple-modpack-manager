@@ -12,6 +12,7 @@ class Mod:
     slug: str  # empty string = skip Modrinth, go straight to curseforge_slug
     side: str
     curseforge_slug: str | None = field(default=None)
+    manual: bool = field(default=False)
 
 
 @dataclass
@@ -90,6 +91,7 @@ def load(path: str | Path = "mods.toml") -> Config:
                 slug=m.get("slug", ""),
                 side=side,
                 curseforge_slug=m.get("curseforge_slug"),
+                manual=m.get("manual", False),
             )
         )
 

@@ -25,3 +25,7 @@ def gray(s: str) -> str:
 
 def bold(s: str) -> str:
     return _c("\033[1m", s)
+
+
+def blue(s: str) -> str:
+    return _c("\033[94m", s)

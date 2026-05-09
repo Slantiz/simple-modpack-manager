@@ -47,12 +47,14 @@ def run(profile: str, verbose: bool = False, force: bool = False) -> None:
     print_section(f"Checking {len(mods)} mods against {sources}")
 
     mod_cache = cache.load(profile)
-    to_download, up_to_date, not_found = checker.check_all(
-        mods, cfg.game_version, cfg.loader, mod_cache, cf_key, verbose, force
+    to_download, up_to_date, not_found, manual_needed = checker.check_all(
+        mods, cfg.game_version, cfg.loader, mod_cache, cf_key, verbose, force, mods_dir
     )
+    cache.save(mod_cache, profile)
 
     to_add = [e for e in to_download if e.get("is_new")]
     to_update = [e for e in to_download if not e.get("is_new")]
+    manually_placed = [e for e in up_to_date if e.get("is_manual")]
 
     deleted = []
     removed = find_removed(mods, mod_cache)
@@ -69,14 +71,27 @@ def run(profile: str, verbose: bool = False, force: bool = False) -> None:
             cache.save(mod_cache, profile)
             print(colors.green("  Removed."))
 
+    manual_up_to_date = len(manually_placed)
+    manual_add = [e for e in manual_needed if e["is_new"]]
+    manual_update = [e for e in manual_needed if not e["is_new"]]
+    total_up_to_date = len(up_to_date)
+    total_add = len(to_add) + len(manual_add)
+    total_update = len(to_update) + len(manual_update)
+
+    def _manual_suffix(n):
+        return f" ({colors.blue(f'{n} manual')})" if n else ""
+
     print_section("Results")
-    print(f"  Up to date : {len(up_to_date)}")
+    print(f"  Up to date : {total_up_to_date}{_manual_suffix(manual_up_to_date)}")
     print(
-        colors.green(f"  To add     : {len(to_add)}") if to_add else "  To add     : 0"
+        colors.green(f"  To add     : {total_add}") + _manual_suffix(len(manual_add))
+        if total_add
+        else "  To add     : 0"
     )
     print(
-        colors.yellow(f"  To update  : {len(to_update)}")
-        if to_update
+        colors.yellow(f"  To update  : {total_update}")
+        + _manual_suffix(len(manual_update))
+        if total_update
         else "  To update  : 0"
     )
     print(
@@ -85,15 +100,25 @@ def run(profile: str, verbose: bool = False, force: bool = False) -> None:
         else "  Not found  : 0"
     )
 
+    if manual_needed:
+        print_section("Manual downloads required")
+        for entry in manual_needed:
+            mod, version = entry["mod"], entry["version"]
+            tag = "[+]" if entry["is_new"] else "[↑]"
+            print(colors.blue(f"  {tag} {mod.name} — {version.version_number}"))
+            print(colors.blue(f"      Download from : {entry['url']}"))
+            print(colors.blue(f"      File          : {version.filename}"))
+            print(colors.blue(f"      Place in      : {mods_dir}"))
+
     if not_found:
         print_section("Not found / errors")
         for entry in not_found:
             print(colors.red(f"  [!] {entry['mod'].name} — {entry['reason']}"))
 
     if not to_download:
-        if not not_found:
+        if not not_found and not manual_needed:
             print(colors.green("\nAll mods are up to date."))
-        write_summary(cfg, profile, [], [], not_found, [], deleted)
+        write_summary(cfg, profile, [], [], not_found, [], deleted, manual_needed)
         return
 
     print()
@@ -136,14 +161,31 @@ def run(profile: str, verbose: bool = False, force: bool = False) -> None:
             print(colors.red(f"FAILED ({e})"))
             failed.append({"mod": mod, "error": str(e)})
 
-    write_summary(cfg, profile, added, updated, not_found, failed, deleted)
+    write_summary(
+        cfg, profile, added, updated, not_found, failed, deleted, manual_needed
+    )
 
 
 def write_summary(
-    cfg, profile: str, added, updated, not_found, failed, deleted=None
+    cfg,
+    profile: str,
+    added,
+    updated,
+    not_found,
+    failed,
+    deleted=None,
+    manual_needed=None,
 ) -> None:
     deleted = deleted or []
-    if not added and not updated and not not_found and not failed and not deleted:
+    manual_needed = manual_needed or []
+    if (
+        not added
+        and not updated
+        and not not_found
+        and not failed
+        and not deleted
+        and not manual_needed
+    ):
         return
 
     summary_dir = Path("summaries")
@@ -177,6 +219,14 @@ def write_summary(
         lines.append(f"DELETED ({len(deleted)})")
         for filename in deleted:
             lines.append(f"  - {filename}")
+        lines.append("")
+
+    if manual_needed:
+        lines.append(f"MANUAL DOWNLOAD REQUIRED ({len(manual_needed)})")
+        for e in manual_needed:
+            tag = "+" if e["is_new"] else "↑"
+            lines.append(f"  {tag} {e['mod'].name} — {e['version'].version_number}")
+            lines.append(f"    {e['url']}")
         lines.append("")
 
     if not_found:
