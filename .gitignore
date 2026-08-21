@@ -1,0 +1,41 @@
+# secrets
+.env
+
+# derived / working artifacts (reconstructable from TOML + network)
+/store/
+/mods/
+/profiles/*.lock.json
+
+# mod jars — never belong in the repo (manual jars get dropped in the cwd for `add`)
+*.jar
+
+# personal profiles — keep only the example template in version control
+/profiles/*.toml
+!/profiles/example.toml
+
+# runtime lock
+.modman.lock
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ruff_cache/
+.pytest_cache/
+# editable / build artifacts (pip install -e .)
+*.egg-info/
+build/
+dist/
+
+# os / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+
+# keep history snapshots? they are small and are your rollback points.
+# Comment the next line out if you'd rather version them in git.
+/history/
+
+.claude/

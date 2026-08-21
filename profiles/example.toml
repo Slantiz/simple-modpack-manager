@@ -1,0 +1,22 @@
+# Starter profile. Copy it, then rename `id` to match the new filename:
+#     cp profiles/example.toml profiles/mypack.toml
+# All fields, sources, and options are documented in the README.
+
+[profile]
+id = "example"
+game_version = "1.21.1"
+loader = "neoforge"        # neoforge | forge | fabric | quilt
+
+# ── Client-only ───────────────────────────────────────────────────────────────
+
+
+# ── Server-only ───────────────────────────────────────────────────────────────
+
+
+# ── Both ──────────────────────────────────────────────────────────────────────
+
+[[mods]]
+name = "Create"
+source = "modrinth"        # modrinth | curseforge | manual | url
+id = "create"              # slug / project id on that source
+side = "both"              # client | server | both

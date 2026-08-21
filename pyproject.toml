@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modman"
+version = "0.1.0"
+description = "Minecraft modpack manager with a deduplicated jar store and rollback"
+requires-python = ">=3.11"
+dependencies = ["requests>=2.31"]
+
+[project.scripts]
+modman = "modman.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
