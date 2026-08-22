@@ -8,13 +8,14 @@ and only via an atomic rename, so a crash never leaves a half-written jar.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import tempfile
 from pathlib import Path
 
 import requests
 
-from .workspace import Workspace
+from .workspace import Workspace, atomic_write_json
 
 _CHUNK = 1 << 16
 _USER_AGENT = "modman/0.1 (+https://github.com/local/modman)"
@@ -186,3 +187,30 @@ class Store:
         for p in self.dir.glob("*.tmp"):
             p.unlink()
         return removed
+
+    # ── manual jar registry ──────────────────────────────────────────────────
+    # Manual jars can't be re-downloaded, so they're pinned here and never swept —
+    # that's what lets rollback to an old manual version always work. The registry
+    # also names each jar for `store` listing (sha512 -> {name, filename}).
+    def _manual_index_path(self) -> Path:
+        return self.dir / "manual-index.json"
+
+    def manual_index(self) -> dict[str, dict]:
+        p = self._manual_index_path()
+        if not p.exists():
+            return {}
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def manual_hashes(self) -> set[str]:
+        return set(self.manual_index())
+
+    def register_manual(self, sha512: str, name: str, filename: str) -> None:
+        idx = self.manual_index()
+        if idx.get(sha512) == {"name": name, "filename": filename}:
+            return
+        idx[sha512] = {"name": name, "filename": filename}
+        self.dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(self._manual_index_path(), idx)

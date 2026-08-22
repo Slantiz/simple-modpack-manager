@@ -5,6 +5,7 @@
     modman install [profile|all] [--dry-run] [-y]
     modman update [profile|all] [mod ...] [-y]
     modman add <mod> <jar> [--profile <id>]
+    modman store
     modman verify [profile|all]
     modman save <profile> [--label "..."]
     modman history <profile>
@@ -227,6 +228,34 @@ def cmd_add(args, ws: Workspace) -> int:
     return rc
 
 
+def cmd_store(args, ws: Workspace) -> int:
+    store = Store(ws)
+    present = {p.stem for p in ws.store_dir.glob("*.jar")} if ws.store_dir.is_dir() else set()
+    if not present:
+        print(report.dim("The store is empty."))
+        return 0
+
+    manual = store.manual_index()
+    name_of: dict[str, str] = {}
+    file_of: dict[str, str] = {}
+    for pid in ws.discover_profile_ids():
+        for e in lock_io.load(pid, ws).entries.values():
+            if e.sha512:
+                name_of.setdefault(e.sha512, e.name)
+                file_of.setdefault(e.sha512, e.filename)
+    for sha, meta in manual.items():
+        name_of.setdefault(sha, meta.get("name", "(manual)"))
+        file_of.setdefault(sha, meta.get("filename", sha[:12] + ".jar"))
+
+    referenced = lock_io.all_referenced_hashes(ws.discover_profile_ids(), ws) & present
+    ref, unref = [], []
+    for sha in present:
+        row = (name_of.get(sha, "(unknown)"), file_of.get(sha, sha[:12] + ".jar"), sha in manual)
+        (ref if sha in referenced else unref).append(row)
+    print(report.format_store(len(present), ref, unref))
+    return 0
+
+
 def cmd_verify(args, ws: Workspace) -> int:
     store, _, _ = _setup(ws)
     rc = 0
@@ -363,6 +392,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("jar", help="path to the .jar (e.g. sitting in the current folder)")
     sp.add_argument("--profile", help="limit to one profile if the mod is in several")
     sp.set_defaults(func=cmd_add)
+
+    sp = sub.add_parser("store", help="list stored jars per mod, and retained manual jars")
+    sp.set_defaults(func=cmd_store)
 
     sp = sub.add_parser("verify", help="integrity + duplicate/dependency/side checks")
     target_arg(sp)

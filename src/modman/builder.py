@@ -25,10 +25,13 @@ class SideResult:
     unmanaged: list[str] = field(default_factory=list)
 
 
-def _client_runnable(entry: LockEntry) -> bool:
-    """Whether an entry can run on a client (and so belongs in a singleplayer build).
-    Only Modrinth advertises this; absent metadata is assumed runnable."""
-    return entry.client_side != "unsupported"
+def _runs_in_singleplayer(entry: LockEntry) -> bool:
+    """Whether an entry belongs in a singleplayer build. A singleplayer instance is a
+    client running an integrated server, so a mod is welcome if it's supported on
+    *either* side (this matches Modrinth's own "Singleplayer" environment badge — a
+    server-side mod like Noisium is singleplayer-supported). Only a mod unsupported on
+    both sides is left out; absent metadata (CurseForge/URL/manual) stays included."""
+    return entry.client_side != "unsupported" or entry.server_side != "unsupported"
 
 
 def entry_targets(entry: LockEntry, profile: Profile) -> list[Path]:
@@ -37,7 +40,7 @@ def entry_targets(entry: LockEntry, profile: Profile) -> list[Path]:
     if entry.is_datapack:
         return [profile.datapacks_dir]
     dirs = [profile.dir_for_side(side) for side in entry.sides()]
-    if profile.build_singleplayer and _client_runnable(entry):
+    if profile.build_singleplayer and _runs_in_singleplayer(entry):
         dirs.append(profile.singleplayer_dir)
     return dirs
 

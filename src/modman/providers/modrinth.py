@@ -76,6 +76,7 @@ class ModrinthProvider(Provider):
             canonical_id=chosen.get("project_id"),
             client_side=client_side,
             server_side=server_side,
+            release_type=chosen.get("version_type", "release"),
         )
 
     def _select(self, versions: list[dict], mod: Mod) -> dict | None:

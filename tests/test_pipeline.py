@@ -71,18 +71,23 @@ class FakeProvider(Provider):
     def resolve(self, mod, game_version, loader, session):
         from modman.providers.base import ResolveError
 
+        rank = {"release": 3, "beta": 2, "alpha": 1}
+        rtype_of = lambda v: v[4] if len(v) > 4 else "release"  # noqa: E731
+
         versions = self.catalog.get(mod.project_id)
         if not versions:
             raise ResolveError(f"no such project {mod.project_id}")
         pin = mod.pinned_version()
-        chosen = versions[0]
         if pin is not None:
-            chosen = next(
-                (v for v in versions if v[1] == pin or v[0] == pin), None
-            )
+            chosen = next((v for v in versions if v[1] == pin or v[0] == pin), None)
             if chosen is None:
                 raise ResolveError(f"pin {pin} not found for {mod.project_id}")
-        vid, vnum, filename, data = chosen
+        else:
+            floor = rank.get(mod.channel, 1)
+            chosen = next((v for v in versions if rank.get(rtype_of(v), 3) >= floor), None)
+            if chosen is None:
+                raise ResolveError(f"no {mod.channel}+ build for {mod.project_id}")
+        vid, vnum, filename, data = chosen[0], chosen[1], chosen[2], chosen[3]
         url = f"https://fake/{mod.project_id}/{vid}"
         self.content[url] = data
         return ResolvedVersion(
@@ -94,6 +99,7 @@ class FakeProvider(Provider):
             download_url=url,
             sha512=hashlib.sha512(data).hexdigest(),
             canonical_id=mod.project_id,
+            release_type=rtype_of(chosen),
         )
 
 
@@ -126,9 +132,10 @@ class PipelineCase(unittest.TestCase):
         return {"modrinth": prov, "curseforge": prov, "manual": prov, "url": prov}
 
     def add_catalog(self, project_id, versions):
-        """versions: list of (version_id, version_number, filename, tag) newest-first."""
+        """versions: (version_id, version_number, filename, tag[, release_type]) newest-first."""
         self.catalog[project_id] = [
-            (vid, vnum, fn, make_jar(tag)) for (vid, vnum, fn, tag) in versions
+            (v[0], v[1], v[2], make_jar(v[3]), (v[4] if len(v) > 4 else "release"))
+            for v in versions
         ]
 
     def write_profile(self, pid, body, game="1.21.1", loader="neoforge"):
@@ -361,6 +368,27 @@ class TestManualCapture(PipelineCase):
         self.assertEqual(item.kind, engine.MANUAL)
         self.assertEqual(item.note, "not present")
 
+    def test_manual_jar_is_retained_after_removal(self):
+        # A manual jar can't be re-downloaded, so it must survive the sweep even once
+        # nothing in the lock references it — that keeps rollback working.
+        self.write_profile(
+            "p", '[[mods]]\nname="Hand"\nsource="manual"\nid="hand-mod"\nside="client"\n')
+        prof = config.load_profile("p", self.ws)
+        jar = self.tmp / "hand-1.0.jar"
+        jar.write_bytes(make_jar("hand"))
+        mod = next(m for m in prof.mods if m.name == "Hand")
+        saved, _, _ = engine.capture_manual(prof, mod, jar, self.store, self.ws)
+        sha = saved.entries["manual:hand-mod"].sha512
+        self.assertTrue(self.store.has(sha))
+        self.assertIn(sha, self.store.manual_hashes())
+
+        # remove the mod from the TOML and install: lock no longer references the jar
+        self.write_profile("p", "")
+        self.install("p")
+        self.assertNotIn("manual:hand-mod", lock_io.load("p", self.ws).entries)
+        # ...but the jar is still in the store (retained), unlike a normal mod
+        self.assertTrue(self.store.has(sha))
+
     def test_manual_mod_without_file_is_flagged_then_added(self):
         # No `file` field: nothing to hardcode. It's "not present" until `add`,
         # then capture_manual ingests + builds it and it stays tracked.
@@ -473,22 +501,89 @@ class TestSingleplayer(PipelineCase):
         prof, _, _ = self.install("p")
         self.assertFalse(prof.singleplayer_dir.exists())
 
-    def test_client_unsupported_server_mod_excluded_from_singleplayer(self):
+    def _entry_targets(self, **kw):
         from modman.builder import entry_targets
         from modman.model import LockEntry
-
         self.write_profile(
             "p", "singleplayer = true\n\n"
             '[[mods]]\nname="A"\nsource="modrinth"\nid="aaa"\nside="server"\n')
         prof = config.load_profile("p", self.ws)
-        dedicated = LockEntry(
-            key="modrinth:aaa", name="A", source="modrinth", project_id="aaa",
-            version_id="v1", version_number="1.0", filename="aaa-1.0.jar",
-            sha512="x", side="server", client_side="unsupported",
-        )
-        targets = entry_targets(dedicated, prof)
+        e = LockEntry(key="modrinth:aaa", name="A", source="modrinth", project_id="aaa",
+                      version_id="v1", version_number="1.0", filename="aaa-1.0.jar",
+                      sha512="x", side="server", **kw)
+        return prof, entry_targets(e, prof)
+
+    def test_server_side_mod_is_included_in_singleplayer(self):
+        # client_side unsupported but server_side required (e.g. Noisium): a
+        # singleplayer world runs the integrated server, so it belongs in singleplayer/.
+        prof, targets = self._entry_targets(client_side="unsupported", server_side="required")
         self.assertIn(prof.server_dir, targets)
+        self.assertIn(prof.singleplayer_dir, targets)
+
+    def test_mod_unsupported_on_both_sides_excluded_from_singleplayer(self):
+        prof, targets = self._entry_targets(client_side="unsupported", server_side="unsupported")
         self.assertNotIn(prof.singleplayer_dir, targets)
+
+
+class TestInstallConstraints(PipelineCase):
+    """install must leave the lock satisfying the TOML — honoring channel and a
+    changed game_version/loader — without chasing 'newest' for valid mods."""
+
+    def test_install_reresolves_when_channel_tightened(self):
+        self.add_catalog("aaa", [
+            ("v3", "3.0", "aaa-3.0.jar", "a3", "alpha"),
+            ("v2", "2.0", "aaa-2.0.jar", "a2", "release"),
+            ("v1", "1.0", "aaa-1.0.jar", "a1", "release"),
+        ])
+        self.write_profile("p", '[[mods]]\nname="A"\nsource="modrinth"\nid="aaa"\nside="both"\n')
+        self.install("p")  # default channel = alpha -> newest = 3.0 (alpha)
+        e = lock_io.load("p", self.ws).entries["modrinth:aaa"]
+        self.assertEqual((e.version_number, e.release_type), ("3.0", "alpha"))
+
+        # tighten to release; install (not update) must move it to newest release
+        self.write_profile(
+            "p", '[[mods]]\nname="A"\nsource="modrinth"\nid="aaa"\nside="both"\nchannel="release"\n')
+        _, pl, _ = self.install("p")
+        e2 = lock_io.load("p", self.ws).entries["modrinth:aaa"]
+        self.assertEqual((e2.version_number, e2.release_type), ("2.0", "release"))
+        self.assertEqual([i.kind for i in pl.items if i.name == "A"], [engine.REPIN])
+
+    def test_install_keeps_when_channel_already_satisfied(self):
+        self.add_catalog("aaa", [("v1", "1.0", "aaa-1.0.jar", "a1", "release")])
+        self.write_profile(
+            "p", '[[mods]]\nname="A"\nsource="modrinth"\nid="aaa"\nside="both"\nchannel="release"\n')
+        self.install("p")
+        _, pl, _ = self.install("p")
+        self.assertTrue(all(i.kind == engine.KEEP for i in pl.items))
+
+    def test_install_reresolves_on_game_version_change(self):
+        self.add_catalog("aaa", [("v1", "1.0", "aaa-1.0.jar", "a1", "release")])
+        self.write_profile("p", '[[mods]]\nname="A"\nsource="modrinth"\nid="aaa"\nside="both"\n')
+        self.install("p")
+        # a newer build appears AND the game version changes -> install re-resolves
+        # (whereas a plain game-version-unchanged install would KEEP v1)
+        self.catalog["aaa"].insert(0, ("v2", "2.0", "aaa-2.0.jar", make_jar("a2"), "release"))
+        self.write_profile(
+            "p", '[[mods]]\nname="A"\nsource="modrinth"\nid="aaa"\nside="both"\n', game="1.21.4")
+        _, pl, _ = self.install("p")
+        self.assertEqual(lock_io.load("p", self.ws).entries["modrinth:aaa"].version_number, "2.0")
+        self.assertEqual([i.kind for i in pl.items if i.name == "A"], [engine.REPIN])
+
+    def test_unknown_release_type_is_not_rechurned(self):
+        # a lock written before release_type was tracked must not be force-changed.
+        from modman.model import Lock, LockEntry
+        self.add_catalog("aaa", [("v2", "2.0", "aaa-2.0.jar", "a2", "release"),
+                                 ("v1", "1.0", "aaa-1.0.jar", "a1", "alpha")])
+        self.write_profile(
+            "p", '[[mods]]\nname="A"\nsource="modrinth"\nid="aaa"\nside="both"\nchannel="release"\n')
+        prof = config.load_profile("p", self.ws)
+        entry = LockEntry(key="modrinth:aaa", name="A", source="modrinth", project_id="aaa",
+                          version_id="v1", version_number="1.0", filename="aaa-1.0.jar",
+                          sha512="z" * 8, side="both", release_type="")
+        lk = Lock(profile_id="p", game_version="1.21.1", loader="neoforge",
+                  entries={"modrinth:aaa": entry})
+        pl = engine.plan(prof, lk, self.registry(), mode="install", session=self.session)
+        self.assertEqual(next(i for i in pl.items if i.name == "A").kind, engine.KEEP)
 
 
 class TestRollback(PipelineCase):

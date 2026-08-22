@@ -36,7 +36,7 @@ def header(title: str) -> str:
 _KIND_STYLE = {
     ADD: ("[+]", green, "add"),
     UPDATE: ("[↑]", yellow, "update"),
-    REPIN: ("[↑]", cyan, "re-pin"),
+    REPIN: ("[↑]", cyan, "re-resolved"),
     HELD: ("[=]", blue, "held"),
     KEEP: ("[=]", dim, "keep"),
     MANUAL: ("[M]", blue, "manual"),
@@ -59,7 +59,7 @@ def _source_label(source: str | None) -> str:
 _CHECK_STATUS = {
     ADD: "new",
     UPDATE: "update available",
-    REPIN: "version pinned",
+    REPIN: "re-resolved to match config",
     HELD: "up to date (pinned)",
     KEEP: "up to date",
     MANUAL: "manual download needed",
@@ -368,11 +368,41 @@ def format_list(profile: Profile, lock: Lock) -> str:
                 tags.append(cyan(f"pinned {m.pinned_version() or 'current'}"))
             if m.is_datapack:
                 tags.append(blue("datapack"))
-            tags.append(dim(f"[{_source_label(m.source)}]"))
+            src = _source_label(m.source)
+            tags.append((blue if m.source == "manual" else dim)(f"[{src}]"))
             suffix = "  " + " ".join(tags)
             name = m.name if m.enabled else dim(m.name)
             lines.append(f"  {name:<{pad}} {dim(str(ver))}{suffix}")
     return "\n".join(lines)
+
+
+def format_store(total: int, referenced, unreferenced) -> str:
+    """``referenced``/``unreferenced``: lists of (name, filename, is_manual)."""
+    lines = [header(f"store · {total} jar(s)")]
+    if referenced:
+        lines += _store_group(referenced)
+    else:
+        lines.append(dim("  (no referenced jars)"))
+    if unreferenced:
+        lines.append(header("Unreferenced — kept for rollback (manual jars)"))
+        lines += _store_group(unreferenced)
+    return "\n".join(lines)
+
+
+def _store_group(items) -> list[str]:
+    from collections import defaultdict
+
+    by_name: dict[str, list[tuple[str, bool]]] = defaultdict(list)
+    for name, filename, is_manual in items:
+        by_name[name].append((filename, is_manual))
+    out = []
+    for name in sorted(by_name, key=str.lower):
+        jars = sorted(set(by_name[name]))
+        tag = " " + blue("[Manual]") if any(m for _, m in jars) else ""
+        out.append(f"  {name}{tag}")
+        for filename, _ in jars:
+            out.append(f"    {dim(filename)}")
+    return out
 
 
 def format_issues(profile: Profile, issues: list[Issue]) -> str:

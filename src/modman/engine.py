@@ -151,9 +151,15 @@ def plan(
     with each ``PlanItem`` the moment it resolves (out of order) for live output."""
     session = session or new_session()
 
+    # A lock resolved for a different game version / loader is stale: on install we
+    # must re-resolve so the built jars actually match the TOML.
+    target_changed = bool(lock.entries) and (
+        lock.game_version != profile.game_version or lock.loader != profile.loader
+    )
+
     def work(mod: Mod) -> PlanItem:
         return _plan_mod(mod, lock.entries.get(mod.key), registry, profile, mode,
-                         update_keys, session)
+                         update_keys, session, target_changed)
 
     items: list[PlanItem] = []
     with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as ex:
@@ -180,6 +186,7 @@ def _plan_mod(
     mode: str,
     update_keys: set[str] | None,
     session,
+    target_changed: bool = False,
 ) -> PlanItem:
     base = PlanItem(key=mod.key, name=mod.name, kind=KEEP, mod=mod, existing=existing)
 
@@ -194,9 +201,17 @@ def _plan_mod(
         return _resolve_into(base, mod, registry, profile, session, kind=ADD)
 
     if mode == "install":
+        # install keeps versions, but must still make the lock satisfy the TOML:
+        # honor explicit pins, and re-resolve anything that violates its channel or
+        # was resolved for a now-changed game version / loader.
         if pin_str and not _at_version(existing, pin_str):
             return _resolve_into(base, mod, registry, profile, session, kind=REPIN,
                                  pin=pin_str)
+        if not pin_str and (target_changed or not _satisfies_channel(existing, mod)):
+            item = _resolve_into(base, mod, registry, profile, session, kind=REPIN)
+            if item.resolved and _at_version(existing, item.resolved.version_id):
+                return replace(base, kind=KEEP)
+            return item
         return replace(base, kind=KEEP)
 
     # mode == update
@@ -276,6 +291,19 @@ def _at_version(entry: LockEntry, token: str) -> bool:
     return entry.version_id == token or entry.version_number == token
 
 
+_CHANNEL_RANK = {"release": 3, "beta": 2, "alpha": 1}
+
+
+def _satisfies_channel(entry: LockEntry, mod: Mod) -> bool:
+    """Whether a locked version meets the mod's declared channel floor. An unknown
+    release type (a lock from before this was tracked) is assumed fine, so old locks
+    don't churn until their next update stamps a real type."""
+    if not entry.release_type:
+        return True
+    floor = _CHANNEL_RANK.get(mod.channel, 3)
+    return _CHANNEL_RANK.get(entry.release_type, 3) >= floor
+
+
 # ── applying ─────────────────────────────────────────────────────────────────
 
 
@@ -340,8 +368,10 @@ def _secure_and_build(plan, registry, store, session, on_download=None) -> dict[
         if kind == MANUAL:
             if item.capture_path:  # a newly-placed jar → ingest it
                 sha = store.add_file(item.capture_path)
+                store.register_manual(sha, item.mod.name, item.capture_path.name)
                 entries[item.key] = _entry_captured(item.mod, item.capture_path.name, sha)
             elif item.existing and store.has(item.existing.sha512):
+                store.register_manual(item.existing.sha512, item.name, item.existing.filename)
                 entries[item.key] = replace(  # keep previously captured jar
                     item.existing, name=item.name,
                     side=item.mod.side, enabled=item.mod.enabled,
@@ -405,6 +435,7 @@ def _entry_resolved(mod: Mod, rv: ResolvedVersion, sha512: str) -> LockEntry:
         download_url=rv.download_url, enabled=mod.enabled, pinned=mod.is_pinned,
         type=mod.type, dependencies=rv.dependencies, canonical_id=rv.canonical_id,
         client_side=rv.client_side, server_side=rv.server_side,
+        release_type=rv.release_type,
     )
 
 
@@ -421,6 +452,7 @@ def capture_manual(
     with ws.exclusive():
         try:
             sha = store.add_file(jar_path)
+            store.register_manual(sha, mod.name, jar_path.name)
             entries = dict(old.entries)
             entries[mod.key] = _entry_captured(mod, jar_path.name, sha)
             new_lock = Lock(
@@ -471,5 +503,7 @@ def _reingest_from_side(profile: Profile, entry: LockEntry, store: Store) -> Non
 
 def _sweep_all(ws: Workspace, store: Store) -> list[str]:
     ids = ws.discover_profile_ids()
-    live = lock_io.all_referenced_hashes(ids, ws)
+    # Live = jars any profile's lock references, plus every manual jar (they can't be
+    # re-downloaded, so they're kept permanently so rollback always works).
+    live = lock_io.all_referenced_hashes(ids, ws) | store.manual_hashes()
     return store.sweep(live)

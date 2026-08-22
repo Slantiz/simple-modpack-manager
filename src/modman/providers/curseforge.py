@@ -17,6 +17,7 @@ LOADER_TYPE = {"forge": 1, "fabric": 4, "quilt": 5, "neoforge": 6}
 # CurseForge release types: 1=release, 2=beta, 3=alpha  (rank so higher = more stable)
 _CHANNEL_RANK = {"release": 3, "beta": 2, "alpha": 1}
 _CF_RELEASE_RANK = {1: 3, 2: 2, 3: 1}
+_CF_RELEASE_NAME = {1: "release", 2: "beta", 3: "alpha"}
 
 
 class CurseForgeProvider(Provider):
@@ -81,6 +82,7 @@ class CurseForgeProvider(Provider):
                 for d in chosen.get("dependencies", [])
                 if d.get("relationType") == 3 and d.get("modId")  # 3 = required
             ),
+            release_type=_CF_RELEASE_NAME.get(chosen.get("releaseType", 1), "release"),
         )
 
     def _mod_id(self, session, slug: str) -> int:

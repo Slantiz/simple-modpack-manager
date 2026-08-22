@@ -56,7 +56,7 @@ Per-mod fields:
 | `id` | yes* | Slug / project id on that source (or the URL for `url`). Optional for `manual` |
 | `side` | yes | `client`, `server`, or `both` |
 | `pin` | no | `"0.6.0"` holds that exact version; `true` freezes the currently locked one |
-| `channel` | no | Lowest release type to accept (`release`/`beta`/`alpha`); default: any, newest wins |
+| `channel` | no | Lowest release type to accept (`release`/`beta`/`alpha`); default: any, newest wins. Tightening it re-resolves on the next `install` |
 | `enabled` | no | `false` keeps the mod in config but leaves it out of the built folders |
 | `type` | no | `"datapack"` resolves a Modrinth datapack into the `datapacks/` folder |
 | `url` | no | For `manual`: the page/download URL, shown by `check` so you can grab newer builds |
@@ -92,9 +92,10 @@ py modman.py rollback tectonic <snap>  # go back if an update breaks things
 |---|---|---|
 | `list [target]` | — | Mods per profile, each with its built jar filename and tags. Read-only. |
 | `check [target]` | — | Resolve each mod against its source (streamed): up to date / update available / manual / not found, then removed + a results summary and a one-line verdict. Read-only. |
-| `install [target]` | `--dry-run`, `-y` | Apply the TOML **without bumping locked versions**: add new mods, prune removed, restore anything missing, then build folders. Checks and prompts first (`-y` skips); `--dry-run` previews only. |
+| `install [target]` | `--dry-run`, `-y` | Make the lock **satisfy the TOML without chasing newer versions**: add new mods, prune removed, restore anything missing, honor pins, and re-resolve anything that violates its `channel` or was built for a now-changed `game_version`/`loader` — then build folders. Checks and prompts first (`-y` skips); `--dry-run` previews only. |
 | `update [profile] [mods…]` | `-y` | Check for updates, then prompt before bumping to newest (respects pins). Name mods to update only those. `-y` skips the prompt. |
 | `add <mod> <jar>` | `--profile` | Register a **manual** jar: ingest it into the store, record it, and build it in. No hardcoded filename needed (see below). |
+| `store` | — | List stored jars grouped by mod, then a section of retained manual jars no lock references (kept for rollback). Read-only. |
 | `verify [target]` | — | Hash-check the store/folders + duplicate / dependency / side-mismatch checks. Exit 1 on errors. |
 | `save <profile>` | `--label`/`-l` | Record the current lock as a known-good snapshot. |
 | `history <profile>` | — | List saved snapshots. |
@@ -105,8 +106,9 @@ py modman.py rollback tectonic <snap>  # go back if an update breaks things
 (`… tectonic nature`) or none / `all` for every profile. `update` takes a single
 profile as its first argument, then optional mod names.
 
-`install` never surprises you with updates — only `update` raises versions. Both
-build the client/server folders as their final step.
+`install` only changes a version to satisfy a constraint you declared (a pin, a
+tightened `channel`, a changed `game_version`) — never to chase "newest." Only
+`update` seeks newer builds. Both build the client/server folders as their final step.
 
 ## How it works
 
@@ -129,7 +131,9 @@ profiles/x.toml → resolve → x.lock.json → store/<sha512>.jar → mods/x/{c
   Rolling back re-secures those jars (re-downloading as needed) and rebuilds.
 - **Sweep** runs after every change: any jar not referenced by some profile's lock is
   deleted, so the store never accumulates junk — while jars shared or pinned by
-  another profile always survive.
+  another profile always survive. **Manual jars are the exception**: they can't be
+  re-downloaded, so they're pinned in the store permanently (even old versions) so
+  rollback always works. `modman store` lists them.
 
 ### Integrity guarantees
 
@@ -174,7 +178,9 @@ py modman.py add voxy voxy-0.2.15-neoforge.jar
 into your folders, and never swept away), and picks the profile automatically — or
 pass `--profile <id>` if the same manual mod is in several. `check` shows a manual
 mod in red as **not present** until you've added its jar; once added it's treated
-like any other locked mod. To swap in a newer build, just `add` the new jar.
+like any other locked mod. To swap in a newer build, just `add` the new jar — the
+old one stays in the store (manual jars are never swept), so you can always roll back
+to it. `modman store` shows every retained jar per mod.
 
 ## Minimal clients & singleplayer
 
@@ -185,9 +191,10 @@ server-side (worldgen, most data mods) on `side = "server"`. They won't land in
 The catch is singleplayer: a singleplayer world runs its own integrated server, so it
 needs those server-side mods on the client too. Rather than bloating the client, set
 `singleplayer = true` in `[profile]`. Each build then also produces a `singleplayer/`
-folder — the union of your client and server mods (everything that can run on a
-client; Modrinth `client_side = unsupported` mods are auto-excluded). Use `client/`
-for the multiplayer client and `singleplayer/` for singleplayer worlds:
+folder — the union of your client and server mods (everything supported in
+singleplayer; a server-side mod like Noisium belongs here because a solo world runs
+the integrated server, and only mods unsupported on *both* sides are left out). Use
+`client/` for the multiplayer client and `singleplayer/` for singleplayer worlds:
 
 ```
 mods/tectonic/

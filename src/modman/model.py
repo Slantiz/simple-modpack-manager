@@ -112,6 +112,7 @@ class ResolvedVersion:
     canonical_id: str | None = None  # provider's own project id (for dep matching)
     client_side: str | None = None  # modrinth support: required|optional|unsupported
     server_side: str | None = None
+    release_type: str = "release"  # release | beta | alpha (for channel enforcement)
 
 
 # ── Resolved current state (the lockfile) ────────────────────────────────────
@@ -138,6 +139,7 @@ class LockEntry:
     canonical_id: str | None = None
     client_side: str | None = None
     server_side: str | None = None
+    release_type: str = ""  # release | beta | alpha; "" = unknown (pre-existing lock)
 
     def to_json(self) -> dict:
         return {
@@ -158,6 +160,7 @@ class LockEntry:
             "canonical_id": self.canonical_id,
             "client_side": self.client_side,
             "server_side": self.server_side,
+            "release_type": self.release_type,
         }
 
     @classmethod
@@ -180,6 +183,7 @@ class LockEntry:
             canonical_id=d.get("canonical_id"),
             client_side=d.get("client_side"),
             server_side=d.get("server_side"),
+            release_type=d.get("release_type", ""),
         )
 
     @property
